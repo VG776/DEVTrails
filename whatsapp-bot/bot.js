@@ -17,6 +17,7 @@ import dotenv from 'dotenv';
 import chalk from 'chalk';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import os from 'os';
 import { execSync } from 'child_process';
 import { routeMessage } from './services/message-handler.js';
 import SessionManager from './services/session-manager.js';
@@ -31,7 +32,7 @@ dotenv.config();
 // ═════════════════════════════════════════════════════════════════
 
 const PORT = process.env.BOT_PORT || 3001;
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://13.51.165.52:8000';
 const DEBUG = process.env.DEBUG === 'true';
 
 const log = {
@@ -48,6 +49,7 @@ const log = {
 // ═════════════════════════════════════════════════════════════════
 
 function findChromePath() {
+  const homeDir = os.homedir();
   const possiblePaths = [
     // macOS
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -58,6 +60,7 @@ function findChromePath() {
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium',
     '/snap/bin/chromium',
+    `${homeDir}/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome`,
     
     // Windows (WSL)
     '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
@@ -66,6 +69,14 @@ function findChromePath() {
   
   for (const path of possiblePaths) {
     try {
+      if (path.includes('*')) {
+        const resolved = execSync(`ls -1 ${path} 2>/dev/null | head -n 1`, { encoding: 'utf8' }).trim();
+        if (resolved) {
+          log.info(`Found Chrome at: ${resolved}`);
+          return resolved;
+        }
+        continue;
+      }
       execSync(`test -f "${path}"`, { stdio: 'pipe' });
       log.info(`Found Chrome at: ${path}`);
       return path;
@@ -97,17 +108,28 @@ const client = new Client({
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-software-rasterizer',
       '--disable-dev-tools',
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-crash-reporter',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-service-autorun',
+      '--password-store=basic',
+      '--use-mock-cert=true',
     ],
     headless: 'new',
-    timeout: 0,
+    timeout: 30000,
     executablePath: chromePath || process.env.PUPPETEER_EXECUTABLE_PATH,
   },
-  authTimeoutMs: 60000,
+  authTimeoutMs: 120000,
   qrMaxRetries: 10,
   takeoverOnConflict: true,
   takeoverTimeoutMs: 0,
@@ -143,10 +165,26 @@ client.on('disconnected', (reason) => {
 });
 
 /**
+ * Client Page Event - Browser automation debugging
+ */
+client.on('page', (page) => {
+  log.debug('Browser page created');
+  
+  // Handle page errors
+  page.on('error', (err) => {
+    log.error(`Browser page error: ${err.message}`);
+  });
+  
+  page.on('close', () => {
+    log.warn('Browser page closed');
+  });
+});
+
+/**
  * Ready Event - bot is fully connected
  */
 client.on('ready', () => {
-  log.success('WhatsApp bot is ready and listening for messages!');
+  log.success('✅ WhatsApp bot is ready and listening for messages!');
   log.info(`Backend URL: ${BACKEND_URL}`);
   log.info(`Bot API listening on port ${PORT}`);
 });
@@ -463,8 +501,24 @@ app.listen(PORT, () => {
   log.info('\nStarting WhatsApp client...\n');
 });
 
-// Initialize WhatsApp client
-client.initialize();
+// Initialize WhatsApp client with error handling
+try {
+  log.info('Initializing Puppeteer and WhatsApp client...');
+  client.initialize().catch((error) => {
+    log.error(`WhatsApp client initialization error: ${error.message}`);
+    log.error(`Error details: ${error.stack}`);
+    if (error.toString().includes('Session closed')) {
+      log.error('Browser session closed unexpectedly. This usually means:');
+      log.error('  1. Chrome/Chromium crashed');
+      log.error('  2. The Puppeteer executable path is incorrect');
+      log.error('  3. System resources are insufficient');
+      process.exit(1);
+    }
+  });
+} catch (error) {
+  log.error(`Failed to initialize WhatsApp client: ${error.message}`);
+  process.exit(1);
+}
 
 // ═════════════════════════════════════════════════════════════════
 // Graceful Shutdown
@@ -501,7 +555,33 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   log.error(`Unhandled Rejection at ${promise}: ${reason}`);
+  
+  // Handle specific Puppeteer/browser errors
+  if (reason && typeof reason === 'object') {
+    if (reason.toString && reason.toString().includes('TargetCloseError')) {
+      log.error('❌ Browser page closed unexpectedly during operation');
+      log.error('This usually means Chrome/Chromium crashed or lost connection');
+      log.error('Attempting to respawn bot...');
+      // Try to reinitialize
+      setTimeout(() => {
+        try {
+          client.initialize().catch((initError) => {
+            log.error(`Reinitialization failed: ${initError.message}`);
+            process.exit(1);
+          });
+        } catch (e) {
+          log.error(`Failed to reinitialize: ${e.message}`);
+          process.exit(1);
+        }
+      }, 2000);
+    } else if (reason.toString && reason.toString().includes('Session closed')) {
+      log.error('❌ Session closed error detected');
+      log.error('Ensure Chrome/Chromium is properly installed and accessible');
+      process.exit(1);
+    } else {
+      log.error(`Reason: ${JSON.stringify(reason)}`);
+    }
+  }
 });
 
 export { client };
-

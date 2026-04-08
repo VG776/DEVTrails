@@ -1,0 +1,14 @@
+{
+  "userId": "b3c12d59-83a6-4b27-99f1-d219bfe6d69f",
+  "phone": "78086884352129@lid",
+  "language": "en",
+  "onboardingStep": "platform_select",
+  "tempData": {},
+  "isOnboarded": true,
+  "createdAt": "2026-04-05T18:29:39.597Z",
+  "lastMessageAt": "2026-04-08T16:04:31.012Z",
+  "status": "active",
+  "platform": "Zomato",
+  "shift": "Morning",
+  "plan": "Shield Basic"
+}
